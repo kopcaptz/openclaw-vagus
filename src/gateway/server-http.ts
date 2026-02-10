@@ -108,6 +108,7 @@ async function authorizeCanvasRequest(params: {
       req,
       trustedProxies,
     });
+    if (!authResult.ok && process.env.OPENCLAW_DEBUG_AUTH) { console.warn(`[DEBUG_AUTH] Canvas request auth failed: ${authResult.reason}`); }
     if (authResult.ok) {
       return true;
     }
@@ -160,7 +161,7 @@ export function createHooksRequestHandler(
     if (!token || token !== hooksConfig.token) {
       res.statusCode = 401;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Unauthorized");
+      sendUnauthorized(res, !token ? "missing_token" : "token_mismatch");
       return true;
     }
 

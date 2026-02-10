@@ -350,7 +350,7 @@ export async function handleOpenResponsesHttpRequest(
     trustedProxies: opts.trustedProxies,
   });
   if (!authResult.ok) {
-    sendUnauthorized(res);
+    sendUnauthorized(res, authResult.reason);
     return true;
   }
 

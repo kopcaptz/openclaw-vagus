@@ -18,9 +18,11 @@ export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
   sendText(res, 405, "Method Not Allowed");
 }
 
-export function sendUnauthorized(res: ServerResponse) {
+export function sendUnauthorized(res: ServerResponse, reason?: string) {
+  const isDebug = Boolean(process.env.OPENCLAW_DEBUG_AUTH);
+  const message = isDebug && reason ? `Unauthorized: ${reason}` : "Unauthorized";
   sendJson(res, 401, {
-    error: { message: "Unauthorized", type: "unauthorized" },
+    error: { message, type: "unauthorized" },
   });
 }
 
