@@ -191,7 +191,7 @@ export async function handleOpenAiHttpRequest(
     trustedProxies: opts.trustedProxies,
   });
   if (!authResult.ok) {
-    sendUnauthorized(res);
+    sendUnauthorized(res, authResult.reason);
     return true;
   }
 

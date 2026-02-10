@@ -123,7 +123,7 @@ export async function handleToolsInvokeHttpRequest(
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
   });
   if (!authResult.ok) {
-    sendUnauthorized(res);
+    sendUnauthorized(res, authResult.reason);
     return true;
   }
 
