@@ -7,13 +7,51 @@ title: "Gateway Runbook"
 
 # Gateway service runbook
 
-Last updated: 2025-12-09
+Last updated: 2026-02-11
 
 ## What it is
 
 - The always-on process that owns the single Baileys/Telegram connection and the control/event plane.
 - Replaces the legacy `gateway` command. CLI entry point: `openclaw gateway`.
 - Runs until stopped; exits non-zero on fatal errors so the supervisor restarts it.
+
+## Runtime architecture
+
+Gateway startup and runtime orchestration now follow explicit phases so behavior stays stable while internals evolve.
+
+### Startup pipeline
+
+At a high level, `startGatewayServer` runs these phases:
+
+1. Prepare config state (legacy migration, validation, plugin auto-enable).
+2. Build plugin and channel runtime metadata (handlers, method list, per-channel runtimes).
+3. Resolve transport/runtime settings (bind/auth/tailscale/control UI roots/TLS).
+4. Start runtime services (HTTP/WS state, maintenance loops, sidecars, reload watchers).
+
+This keeps high-risk boot logic isolated and makes reviews safer when changing only one phase.
+
+### WS request context contract
+
+Gateway WS handlers use a typed runtime context built from grouped sections:
+
+- `infra`
+- `health`
+- `nodes`
+- `chat`
+- `wizard`
+- `channels`
+
+This preserves the existing method behavior but reduces accidental coupling when adding new WS methods or events.
+
+### Channel manager boundaries
+
+Channel runtime internals are split into three service layers behind the same `createChannelManager` facade:
+
+- Runtime store layer: account status state and task/abort maps.
+- Lifecycle layer: start, stop, logout transitions.
+- Status projection layer: read-only runtime snapshot for gateway APIs.
+
+The public manager API is unchanged, so call sites in gateway methods and reload paths keep working while channel internals stay easier to test and extend.
 
 ## How to run (local)
 
