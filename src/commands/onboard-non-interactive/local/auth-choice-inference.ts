@@ -18,6 +18,8 @@ type AuthChoiceFlagOptions = Pick<
   | "kimiCodeApiKey"
   | "syntheticApiKey"
   | "veniceApiKey"
+  | "togetherApiKey"
+  | "qianfanApiKey"
   | "zaiApiKey"
   | "xiaomiApiKey"
   | "minimaxApiKey"
@@ -40,6 +42,8 @@ const AUTH_CHOICE_FLAG_MAP = [
   { flag: "kimiCodeApiKey", authChoice: "kimi-code-api-key", label: "--kimi-code-api-key" },
   { flag: "syntheticApiKey", authChoice: "synthetic-api-key", label: "--synthetic-api-key" },
   { flag: "veniceApiKey", authChoice: "venice-api-key", label: "--venice-api-key" },
+  { flag: "togetherApiKey", authChoice: "together-api-key", label: "--together-api-key" },
+  { flag: "qianfanApiKey", authChoice: "qianfan-api-key", label: "--qianfan-api-key" },
   { flag: "zaiApiKey", authChoice: "zai-api-key", label: "--zai-api-key" },
   { flag: "xiaomiApiKey", authChoice: "xiaomi-api-key", label: "--xiaomi-api-key" },
   { flag: "xaiApiKey", authChoice: "xai-api-key", label: "--xai-api-key" },

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "./prompts.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
@@ -9,6 +9,11 @@ import { runOnboardingWizard } from "./onboarding.js";
 
 const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const applyAuthChoice = vi.hoisted(() =>
+  vi.fn(async (params: { config: Record<string, unknown> }) => ({ config: params.config })),
+);
+const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
+const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
 const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
@@ -26,6 +31,12 @@ vi.mock("../commands/onboard-channels.js", () => ({
 
 vi.mock("../commands/onboard-skills.js", () => ({
   setupSkills,
+}));
+
+vi.mock("../commands/auth-choice.js", () => ({
+  applyAuthChoice,
+  resolvePreferredProviderForAuthChoice,
+  warnIfModelConfigLooksOff,
 }));
 
 vi.mock("../commands/health.js", () => ({
@@ -74,6 +85,10 @@ vi.mock("../tui/tui.js", () => ({
 }));
 
 describe("runOnboardingWizard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("exits when config is invalid", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
@@ -168,6 +183,141 @@ describe("runOnboardingWizard", () => {
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
+  });
+
+  it("forwards provider API key flags into interactive auth flow", async () => {
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select: vi.fn(async () => "quickstart"),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "openai-api-key",
+        openaiApiKey: "sk-openai-flag",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authChoice: "openai-api-key",
+        opts: expect.objectContaining({
+          openaiApiKey: "sk-openai-flag",
+          tokenProvider: "openai",
+          token: "sk-openai-flag",
+        }),
+      }),
+    );
+  });
+
+  it("infers auth choice from a single API key flag in interactive onboarding", async () => {
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select: vi.fn(async () => "quickstart"),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        qianfanApiKey: "bce-v3/ALTAK-test",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authChoice: "qianfan-api-key",
+        opts: expect.objectContaining({
+          qianfanApiKey: "bce-v3/ALTAK-test",
+          tokenProvider: "qianfan",
+          token: "bce-v3/ALTAK-test",
+        }),
+      }),
+    );
+  });
+
+  it("rejects ambiguous interactive auth flags when auth choice is not explicit", async () => {
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select: vi.fn(async () => "quickstart"),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await expect(
+      runOnboardingWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          openaiApiKey: "sk-openai-flag",
+          togetherApiKey: "sk-together-flag",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      ),
+    ).rejects.toThrow("exit:1");
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Multiple API key flags were provided for onboarding."),
+    );
   });
 
   it("launches TUI without auto-delivery when hatching", async () => {

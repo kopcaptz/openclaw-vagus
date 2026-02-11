@@ -1,4 +1,5 @@
 import type {
+  AuthChoice,
   GatewayAuthChoice,
   OnboardMode,
   OnboardOptions,
@@ -8,6 +9,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { promptAuthChoiceGrouped } from "../commands/auth-choice-prompt.js";
@@ -28,6 +30,7 @@ import {
   summarizeExistingConfig,
 } from "../commands/onboard-helpers.js";
 import { setupInternalHooks } from "../commands/onboard-hooks.js";
+import { inferAuthChoiceFromFlags } from "../commands/onboard-non-interactive/local/auth-choice-inference.js";
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
 import {
@@ -39,9 +42,94 @@ import {
 import { logConfigUpdated } from "../config/logging.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { finalizeOnboardingWizard } from "./onboarding.finalize.js";
 import { configureGatewayForOnboarding } from "./onboarding.gateway-config.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+
+function resolveWizardAuthTokenInput(
+  opts: OnboardOptions,
+  authChoice: AuthChoice,
+): { tokenProvider?: string; token?: string } {
+  const fromFlag = (provider: string, value?: string) => {
+    const token = normalizeOptionalSecretInput(value);
+    return token ? { tokenProvider: provider, token } : {};
+  };
+
+  switch (authChoice) {
+    case "apiKey":
+      return fromFlag("anthropic", opts.anthropicApiKey);
+    case "openai-api-key":
+      return fromFlag("openai", opts.openaiApiKey);
+    case "openrouter-api-key":
+      return fromFlag("openrouter", opts.openrouterApiKey);
+    case "ai-gateway-api-key":
+      return fromFlag("vercel-ai-gateway", opts.aiGatewayApiKey);
+    case "cloudflare-ai-gateway-api-key":
+      return fromFlag("cloudflare-ai-gateway", opts.cloudflareAiGatewayApiKey);
+    case "moonshot-api-key":
+    case "moonshot-api-key-cn":
+      return fromFlag("moonshot", opts.moonshotApiKey);
+    case "kimi-code-api-key":
+      return fromFlag("kimi-coding", opts.kimiCodeApiKey);
+    case "gemini-api-key":
+      return fromFlag("google", opts.geminiApiKey);
+    case "zai-api-key":
+      return fromFlag("zai", opts.zaiApiKey);
+    case "xiaomi-api-key":
+      return fromFlag("xiaomi", opts.xiaomiApiKey);
+    case "qianfan-api-key":
+      return fromFlag("qianfan", opts.qianfanApiKey);
+    case "synthetic-api-key":
+      return fromFlag("synthetic", opts.syntheticApiKey);
+    case "venice-api-key":
+      return fromFlag("venice", opts.veniceApiKey);
+    case "together-api-key":
+      return fromFlag("together", opts.togetherApiKey);
+    case "opencode-zen":
+      return fromFlag("opencode", opts.opencodeZenApiKey);
+    case "minimax-api":
+    case "minimax-api-lightning":
+      return fromFlag("minimax", opts.minimaxApiKey);
+    default:
+      return {};
+  }
+}
+
+function resolveWizardAuthChoiceOpts(opts: OnboardOptions, authChoice: AuthChoice) {
+  const explicitTokenProvider = opts.tokenProvider?.trim();
+  const explicitToken = normalizeOptionalSecretInput(opts.token);
+  const fromFlags = resolveWizardAuthTokenInput(opts, authChoice);
+  const tokenProvider = fromFlags.tokenProvider ?? explicitTokenProvider;
+  const token = fromFlags.token ?? explicitToken;
+  const normalizedTokenProvider = tokenProvider ? normalizeProviderId(tokenProvider) : undefined;
+
+  return {
+    tokenProvider,
+    token,
+    anthropicApiKey: opts.anthropicApiKey,
+    openaiApiKey: opts.openaiApiKey,
+    openrouterApiKey: opts.openrouterApiKey,
+    aiGatewayApiKey: opts.aiGatewayApiKey,
+    cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId,
+    cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId,
+    cloudflareAiGatewayApiKey: opts.cloudflareAiGatewayApiKey,
+    moonshotApiKey: opts.moonshotApiKey,
+    kimiCodeApiKey: opts.kimiCodeApiKey,
+    geminiApiKey: opts.geminiApiKey,
+    zaiApiKey: opts.zaiApiKey,
+    xiaomiApiKey: opts.xiaomiApiKey,
+    qianfanApiKey: opts.qianfanApiKey,
+    minimaxApiKey: opts.minimaxApiKey,
+    syntheticApiKey: opts.syntheticApiKey,
+    veniceApiKey: opts.veniceApiKey,
+    togetherApiKey: opts.togetherApiKey,
+    opencodeZenApiKey: opts.opencodeZenApiKey,
+    xaiApiKey:
+      opts.xaiApiKey ??
+      (authChoice === "xai-api-key" && normalizedTokenProvider === "xai" ? token : undefined),
+  };
+}
 
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
@@ -369,9 +457,23 @@ export async function runOnboardingWizard(
   const authStore = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: false,
   });
-  const authChoiceFromPrompt = opts.authChoice === undefined;
+  const inferredAuthChoice = inferAuthChoiceFromFlags(opts);
+  if (!opts.authChoice && inferredAuthChoice.matches.length > 1) {
+    runtime.error(
+      [
+        "Multiple API key flags were provided for onboarding.",
+        "Use a single provider flag or pass --auth-choice explicitly.",
+        `Flags: ${inferredAuthChoice.matches.map((match) => match.label).join(", ")}`,
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return;
+  }
+
+  const authChoiceFromPrompt = opts.authChoice === undefined && !inferredAuthChoice.choice;
   const authChoice =
     opts.authChoice ??
+    inferredAuthChoice.choice ??
     (await promptAuthChoiceGrouped({
       prompter,
       store: authStore,
@@ -384,10 +486,7 @@ export async function runOnboardingWizard(
     prompter,
     runtime,
     setDefaultModel: true,
-    opts: {
-      tokenProvider: opts.tokenProvider,
-      token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
-    },
+    opts: resolveWizardAuthChoiceOpts(opts, authChoice),
   });
   nextConfig = authResult.config;
 

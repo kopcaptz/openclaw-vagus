@@ -25,6 +25,21 @@ export type ApplyAuthChoiceParams = {
   opts?: {
     tokenProvider?: string;
     token?: string;
+    anthropicApiKey?: string;
+    openaiApiKey?: string;
+    openrouterApiKey?: string;
+    aiGatewayApiKey?: string;
+    moonshotApiKey?: string;
+    kimiCodeApiKey?: string;
+    geminiApiKey?: string;
+    zaiApiKey?: string;
+    xiaomiApiKey?: string;
+    qianfanApiKey?: string;
+    minimaxApiKey?: string;
+    syntheticApiKey?: string;
+    veniceApiKey?: string;
+    togetherApiKey?: string;
+    opencodeZenApiKey?: string;
     cloudflareAiGatewayAccountId?: string;
     cloudflareAiGatewayGatewayId?: string;
     cloudflareAiGatewayApiKey?: string;
