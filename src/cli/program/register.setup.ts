@@ -20,7 +20,11 @@ export function registerSetupCommand(program: Command) {
       "--workspace <dir>",
       "Agent workspace directory (default: ~/.openclaw/workspace; stored as agents.defaults.workspace)",
     )
-    .option("--wizard", "Run the interactive onboarding wizard", false)
+    .option(
+      "--wizard",
+      "Deprecated: run the interactive onboarding wizard (prefer `openclaw onboard`)",
+      false,
+    )
     .option("--non-interactive", "Run the wizard without prompts", false)
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
@@ -35,6 +39,9 @@ export function registerSetupCommand(program: Command) {
           "remoteToken",
         ]);
         if (opts.wizard || hasWizardFlags) {
+          defaultRuntime.log(
+            'warning: setup wizard flags are deprecated; use "openclaw onboard" instead',
+          );
           await onboardCommand(
             {
               workspace: opts.workspace as string | undefined,
