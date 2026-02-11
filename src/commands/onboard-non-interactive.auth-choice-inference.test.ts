@@ -22,13 +22,14 @@ describe("inferAuthChoiceFromFlags", () => {
     expect(inferred.matches[0]?.label).toBe("--together-api-key");
   });
 
-  it("marks result as ambiguous when multiple API key flags are provided", () => {
+  it("returns all matches when multiple API key flags are provided", () => {
     const inferred = inferAuthChoiceFromFlags({
       togetherApiKey: "tg_test",
       qianfanApiKey: "bce-v3/test",
     });
 
-    expect(inferred.choice).toBeUndefined();
+    // Callers treat matches.length > 1 as ambiguous and exit with guidance.
+    expect(inferred.choice).toBe("together-api-key");
     expect(inferred.matches.map((match) => match.label)).toEqual([
       "--together-api-key",
       "--qianfan-api-key",
