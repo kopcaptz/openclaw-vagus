@@ -50,6 +50,7 @@ import { createAgentEventHandler } from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
+import { composeGatewayMethods } from "./server-gateway-methods.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
@@ -68,6 +69,7 @@ import { logGatewayStartup } from "./server-startup-log.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
+import { buildGatewayRequestContext } from "./server-ws-context.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
 import {
   getHealthCache,
@@ -152,21 +154,14 @@ export type GatewayServerOptions = {
   ) => Promise<void>;
 };
 
-export async function startGatewayServer(
-  port = 18789,
-  opts: GatewayServerOptions = {},
-): Promise<GatewayServer> {
-  // Ensure all default port derivations (browser/canvas) see the actual runtime port.
-  process.env.OPENCLAW_GATEWAY_PORT = String(port);
-  logAcceptedEnvOption({
-    key: "OPENCLAW_RAW_STREAM",
-    description: "raw stream logging enabled",
-  });
-  logAcceptedEnvOption({
-    key: "OPENCLAW_RAW_STREAM_PATH",
-    description: "raw stream log path override",
-  });
+type GatewayPluginAndChannelRuntime = {
+  pluginRegistry: ReturnType<typeof loadGatewayPlugins>["pluginRegistry"];
+  gatewayMethods: string[];
+  channelLogs: Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
+  channelRuntimeEnvs: Record<ChannelId, RuntimeEnv>;
+};
 
+async function prepareGatewayConfigForStartup() {
   let configSnapshot = await readConfigFileSnapshot();
   if (configSnapshot.legacyIssues.length > 0) {
     if (isNixMode) {
@@ -183,9 +178,7 @@ export async function startGatewayServer(
     await writeConfigFile(migrated);
     if (changes.length > 0) {
       log.info(
-        `gateway: migrated legacy config entries:\n${changes
-          .map((entry) => `- ${entry}`)
-          .join("\n")}`,
+        `gateway: migrated legacy config entries:\n${changes.map((entry) => `- ${entry}`).join("\n")}`,
       );
     }
   }
@@ -208,28 +201,24 @@ export async function startGatewayServer(
     try {
       await writeConfigFile(autoEnable.config);
       log.info(
-        `gateway: auto-enabled plugins:\n${autoEnable.changes
-          .map((entry) => `- ${entry}`)
-          .join("\n")}`,
+        `gateway: auto-enabled plugins:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
       );
     } catch (err) {
       log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
     }
   }
 
-  const cfgAtStart = loadConfig();
-  const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
-  if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat();
-  }
-  setGatewaySigusr1RestartPolicy({ allowExternal: cfgAtStart.commands?.restart === true });
-  initSubagentRegistry();
-  const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
-  const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
+  return loadConfig();
+}
+
+function buildGatewayPluginsAndMethods(params: {
+  cfgAtStart: ReturnType<typeof loadConfig>;
+  defaultWorkspaceDir: string;
+}): GatewayPluginAndChannelRuntime {
   const baseMethods = listGatewayMethods();
-  const { pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayPlugins({
-    cfg: cfgAtStart,
-    workspaceDir: defaultWorkspaceDir,
+  const { pluginRegistry, gatewayMethods: pluginGatewayMethods } = loadGatewayPlugins({
+    cfg: params.cfgAtStart,
+    workspaceDir: params.defaultWorkspaceDir,
     log,
     coreGatewayHandlers,
     baseMethods,
@@ -241,7 +230,77 @@ export async function startGatewayServer(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
   ) as Record<ChannelId, RuntimeEnv>;
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
-  const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
+  const gatewayMethods = composeGatewayMethods(pluginGatewayMethods, channelMethods);
+  return { pluginRegistry, gatewayMethods, channelLogs, channelRuntimeEnvs };
+}
+
+async function resolveGatewayControlUiRootState(params: {
+  controlUiRootOverride: string | undefined;
+  controlUiEnabled: boolean;
+}): Promise<ControlUiRootState | undefined> {
+  if (params.controlUiRootOverride) {
+    const resolvedOverride = resolveControlUiRootOverrideSync(params.controlUiRootOverride);
+    const resolvedOverridePath = path.resolve(params.controlUiRootOverride);
+    if (!resolvedOverride) {
+      log.warn(`gateway: controlUi.root not found at ${resolvedOverridePath}`);
+      return { kind: "invalid", path: resolvedOverridePath };
+    }
+    return { kind: "resolved", path: resolvedOverride };
+  }
+
+  if (!params.controlUiEnabled) {
+    return undefined;
+  }
+
+  let resolvedRoot = resolveControlUiRootSync({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
+  if (!resolvedRoot) {
+    const ensureResult = await ensureControlUiAssetsBuilt(gatewayRuntime);
+    if (!ensureResult.ok && ensureResult.message) {
+      log.warn(`gateway: ${ensureResult.message}`);
+    }
+    resolvedRoot = resolveControlUiRootSync({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    });
+  }
+
+  return resolvedRoot ? { kind: "resolved", path: resolvedRoot } : { kind: "missing" };
+}
+
+export async function startGatewayServer(
+  port = 18789,
+  opts: GatewayServerOptions = {},
+): Promise<GatewayServer> {
+  // Ensure all default port derivations (browser/canvas) see the actual runtime port.
+  process.env.OPENCLAW_GATEWAY_PORT = String(port);
+  logAcceptedEnvOption({
+    key: "OPENCLAW_RAW_STREAM",
+    description: "raw stream logging enabled",
+  });
+  logAcceptedEnvOption({
+    key: "OPENCLAW_RAW_STREAM_PATH",
+    description: "raw stream log path override",
+  });
+
+  const cfgAtStart = await prepareGatewayConfigForStartup();
+  const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
+  if (diagnosticsEnabled) {
+    startDiagnosticHeartbeat();
+  }
+  setGatewaySigusr1RestartPolicy({ allowExternal: cfgAtStart.commands?.restart === true });
+  initSubagentRegistry();
+  const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
+  const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
+  const { pluginRegistry, gatewayMethods, channelLogs, channelRuntimeEnvs } =
+    buildGatewayPluginsAndMethods({
+      cfgAtStart,
+      defaultWorkspaceDir,
+    });
   let pluginServices: PluginServicesHandle | null = null;
   const runtimeConfig = await resolveGatewayRuntimeConfig({
     cfg: cfgAtStart,
@@ -269,37 +328,10 @@ export async function startGatewayServer(
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
 
-  let controlUiRootState: ControlUiRootState | undefined;
-  if (controlUiRootOverride) {
-    const resolvedOverride = resolveControlUiRootOverrideSync(controlUiRootOverride);
-    const resolvedOverridePath = path.resolve(controlUiRootOverride);
-    controlUiRootState = resolvedOverride
-      ? { kind: "resolved", path: resolvedOverride }
-      : { kind: "invalid", path: resolvedOverridePath };
-    if (!resolvedOverride) {
-      log.warn(`gateway: controlUi.root not found at ${resolvedOverridePath}`);
-    }
-  } else if (controlUiEnabled) {
-    let resolvedRoot = resolveControlUiRootSync({
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    });
-    if (!resolvedRoot) {
-      const ensureResult = await ensureControlUiAssetsBuilt(gatewayRuntime);
-      if (!ensureResult.ok && ensureResult.message) {
-        log.warn(`gateway: ${ensureResult.message}`);
-      }
-      resolvedRoot = resolveControlUiRootSync({
-        moduleUrl: import.meta.url,
-        argv1: process.argv[1],
-        cwd: process.cwd(),
-      });
-    }
-    controlUiRootState = resolvedRoot
-      ? { kind: "resolved", path: resolvedRoot }
-      : { kind: "missing" };
-  }
+  const controlUiRootState = await resolveGatewayControlUiRootState({
+    controlUiRootOverride,
+    controlUiEnabled,
+  });
 
   const wizardRunner = opts.wizardRunner ?? runOnboardingWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
@@ -487,45 +519,57 @@ export async function startGatewayServer(
       ...execApprovalHandlers,
     },
     broadcast,
-    context: {
-      deps,
-      cron,
-      cronStorePath,
-      loadGatewayModelCatalog,
-      getHealthCache,
-      refreshHealthSnapshot: refreshGatewayHealthSnapshot,
-      logHealth,
-      logGateway: log,
-      incrementPresenceVersion,
-      getHealthVersion,
-      broadcast,
-      broadcastToConnIds,
-      nodeSendToSession,
-      nodeSendToAllSubscribed,
-      nodeSubscribe,
-      nodeUnsubscribe,
-      nodeUnsubscribeAll,
-      hasConnectedMobileNode: hasMobileNodeConnected,
-      nodeRegistry,
-      agentRunSeq,
-      chatAbortControllers,
-      chatAbortedRuns: chatRunState.abortedRuns,
-      chatRunBuffers: chatRunState.buffers,
-      chatDeltaSentAt: chatRunState.deltaSentAt,
-      addChatRun,
-      removeChatRun,
-      registerToolEventRecipient: toolEventRecipients.add,
-      dedupe,
-      wizardSessions,
-      findRunningWizard,
-      purgeWizardSession,
-      getRuntimeSnapshot,
-      startChannel,
-      stopChannel,
-      markChannelLoggedOut,
-      wizardRunner,
-      broadcastVoiceWakeChanged,
-    },
+    context: buildGatewayRequestContext({
+      infra: {
+        deps,
+        cron,
+        cronStorePath,
+        loadGatewayModelCatalog,
+        logGateway: log,
+        broadcast,
+        broadcastToConnIds,
+        dedupe,
+      },
+      health: {
+        getHealthCache,
+        refreshHealthSnapshot: refreshGatewayHealthSnapshot,
+        logHealth,
+        incrementPresenceVersion,
+        getHealthVersion,
+      },
+      nodes: {
+        nodeSendToSession,
+        nodeSendToAllSubscribed,
+        nodeSubscribe,
+        nodeUnsubscribe,
+        nodeUnsubscribeAll,
+        hasConnectedMobileNode: hasMobileNodeConnected,
+        nodeRegistry,
+        broadcastVoiceWakeChanged,
+      },
+      chat: {
+        agentRunSeq,
+        chatAbortControllers,
+        chatAbortedRuns: chatRunState.abortedRuns,
+        chatRunBuffers: chatRunState.buffers,
+        chatDeltaSentAt: chatRunState.deltaSentAt,
+        addChatRun,
+        removeChatRun,
+        registerToolEventRecipient: toolEventRecipients.add,
+      },
+      wizard: {
+        wizardSessions,
+        findRunningWizard,
+        purgeWizardSession,
+        wizardRunner,
+      },
+      channels: {
+        getRuntimeSnapshot,
+        startChannel,
+        stopChannel,
+        markChannelLoggedOut,
+      },
+    }),
   });
   logGatewayStartup({
     cfg: cfgAtStart,

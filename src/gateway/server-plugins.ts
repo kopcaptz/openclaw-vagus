@@ -1,6 +1,7 @@
 import type { loadConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { composeGatewayMethods } from "./server-gateway-methods.js";
 
 export function loadGatewayPlugins(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -26,7 +27,7 @@ export function loadGatewayPlugins(params: {
     coreGatewayHandlers: params.coreGatewayHandlers,
   });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
-  const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
+  const gatewayMethods = composeGatewayMethods(params.baseMethods, pluginMethods);
   if (pluginRegistry.diagnostics.length > 0) {
     for (const diag of pluginRegistry.diagnostics) {
       const details = [
