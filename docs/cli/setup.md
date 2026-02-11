@@ -22,7 +22,13 @@ openclaw setup
 openclaw setup --workspace ~/.openclaw/workspace
 ```
 
-To run the wizard via setup:
+To run the onboarding wizard (preferred command):
+
+```bash
+openclaw onboard
+```
+
+Legacy compatibility (still works, deprecated):
 
 ```bash
 openclaw setup --wizard

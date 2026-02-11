@@ -154,6 +154,9 @@ describe("cli program (smoke)", () => {
     await program.parseAsync(["setup", "--remote-url", "ws://example"], {
       from: "user",
     });
+    expect(runtime.log).toHaveBeenCalledWith(
+      'warning: setup wizard flags are deprecated; use "openclaw onboard" instead',
+    );
     expect(onboardCommand).toHaveBeenCalled();
     expect(setupCommand).not.toHaveBeenCalled();
   });

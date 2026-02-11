@@ -44,7 +44,22 @@ Model note: while any model is supported, I strongly recommend **Anthropic Pro/M
 
 ## Install (recommended)
 
-Runtime: **Node ≥22**.
+Runtime: **Node ≥22** (the installer can install Node automatically).
+
+```bash
+curl -fsSL https://openclaw.ai/install.sh | bash
+# Windows PowerShell:
+# iwr -useb https://openclaw.ai/install.ps1 | iex
+```
+
+The installer handles Node detection, CLI installation, and onboarding in one flow.
+If onboarding is skipped (for example in CI/no TTY), run:
+
+```bash
+openclaw onboard --install-daemon
+```
+
+Prefer a manual package-manager install?
 
 ```bash
 npm install -g openclaw@latest
@@ -62,6 +77,7 @@ Runtime: **Node ≥22**.
 Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
 
 ```bash
+# If onboarding did not launch during install:
 openclaw onboard --install-daemon
 
 openclaw gateway --port 18789 --verbose

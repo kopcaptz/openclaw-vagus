@@ -19,7 +19,7 @@ Docs: [Dashboard](/web/dashboard) and [Control UI](/web/control-ui).
 
 ## Prereqs
 
-- Node 22 or newer
+- Node 22 or newer (the installer script installs it if missing)
 
 <Tip>
 Check your Node version with `node --version` if you are unsure.
@@ -47,11 +47,13 @@ Check your Node version with `node --version` if you are unsure.
     </Note>
 
   </Step>
-  <Step title="Run the onboarding wizard">
+  <Step title="If onboarding did not start automatically">
     ```bash
     openclaw onboard --install-daemon
     ```
 
+    On interactive terminals, the installer usually launches onboarding for you.
+    Run this command when onboarding was skipped (for example, no TTY/CI or `--no-onboard`).
     The wizard configures auth, gateway settings, and optional channels.
     See [Onboarding Wizard](/start/wizard) for details.
 
